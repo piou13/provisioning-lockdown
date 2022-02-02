@@ -4,7 +4,7 @@ az login
 resourcesGroup="<- YOUR RESOURCES GROUP NAME ->"
 resourcesPrefix="<- YOUR RESOURCES PREFIX LOWERCASE, NO SPACE, STARTS BY LETTER, ... ->"
 
-# Deploy core resources ARM template
+# Deploy lockdown infrastructure ARM template
 date=$(date '+%Y-%m-%d-%H-%M-%S')
 deploymentName="provlockdown-lockdown-components-${date}"
 armParam="{\"ResourcesName\":{\"value\":\"${resourcesPrefix}\"}}"
