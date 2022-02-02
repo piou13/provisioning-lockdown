@@ -1,0 +1,801 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "ResourcesName": {
+            "type": "string",
+            "metadata": {
+                "description": "Azure resources name."
+            }
+        }
+    },
+    "variables": {
+        "VirtualNetworkName": "[concat(parameters('ResourcesName'), 'vnet')]",
+        "StorageAccountName": "[concat(parameters('ResourcesName'), 'sa')]",
+        "LogicAppHostingPlanName": "[concat(parameters('ResourcesName'), 'laasp')]",
+        "LogicAppName": "[concat(parameters('ResourcesName'), 'la')]",
+        "ApplicationInsightsName": "[concat(parameters('ResourcesName'), 'insights')]",
+        "MonitorPrivateLinkScopeName": "[concat(parameters('ResourcesName'), 'ampls')]",
+        "PrivateStorageFileDnsZoneName": "[concat('privatelink.file.', environment().suffixes.storage)]",
+        "PrivateStorageBlobDnsZoneName": "[concat('privatelink.blob.', environment().suffixes.storage)]",
+        "PrivateStorageQueueDnsZoneName": "[concat('privatelink.queue.', environment().suffixes.storage)]",
+        "PrivateStorageTableDnsZoneName": "[concat('privatelink.table.', environment().suffixes.storage)]",
+        "PrivateEndpointFileStorageName": "[concat(variables('StorageAccountName'), '-file-pep')]",
+        "PrivateEndpointBlobStorageName": "[concat(variables('StorageAccountName'), '-blob-pep')]",
+        "PrivateEndpointQueueStorageName": "[concat(variables('StorageAccountName'), '-queue-pep')]",
+        "PrivateEndpointTableStorageName": "[concat(variables('StorageAccountName'), '-table-pep')]",
+        "VirtualNetworkLinksSuffixFileStorageName": "[concat(variables('privateStorageFileDnsZoneName'), '-link')]",
+        "VirtualNetworkLinksSuffixBlobStorageName": "[concat(variables('privateStorageBlobDnsZoneName'), '-link')]",
+        "VirtualNetworkLinksSuffixQueueStorageName": "[concat(variables('privateStorageQueueDnsZoneName'), '-link')]",
+        "VirtualNetworkLinksSuffixTableStorageName": "[concat(variables('privateStorageTableDNSZoneName'), '-link')]",
+        "DnsZoneNameInsightsMonitor": "privatelink.monitor.azure.com",
+        "DnsZoneNameInsightsOds": "privatelink.ods.opinsights.azure.com",
+        "DnsZoneNameInsightsOms": "privatelink.oms.opinsights.azure.com",
+        "VirtualNetworkLinksSuffixInsightsMonitor": "[concat(variables('DnsZoneNameInsightsMonitor'), '-link')]",
+        "VirtualNetworkLinksSuffixInsightsOds": "[concat(variables('DnsZoneNameInsightsOds'), '-link')]",
+        "VirtualNetworkLinksSuffixInsightsOms": "[concat(variables('DnsZoneNameInsightsOms'), '-link')]",
+        "PrivateEndpointInsightsName": "[concat(variables('ApplicationInsightsName'), '-pep')]",
+        "DnsZoneNameAppService": "privatelink.azurewebsites.net",
+        "VirtualNetworkLinksSuffixAppService": "[concat(variables('DnsZoneNameAppService'), '-link')]",
+        "PrivateEndpointAppServiceLogicAppName": "[concat(variables('LogicAppName'), '-pep')]"
+    },
+    "functions": [],
+    "resources": [
+        {
+            "type": "Microsoft.Network/virtualNetworks",
+            "apiVersion": "2020-11-01",
+            "name": "[variables('VirtualNetworkName')]",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "addressSpace": {
+                    "addressPrefixes": [
+                        "10.100.0.0/16"
+                    ]
+                },
+                "subnets": [
+                    {
+                        "name": "PrivateEndpointSubnet",
+                        "properties": {
+                            "addressPrefix": "10.100.1.0/24",
+                            "serviceEndpoints": [],
+                            "delegations": [],
+                            "privateEndpointNetworkPolicies": "Disabled",
+                            "privateLinkServiceNetworkPolicies": "Enabled"
+                        }
+                    },
+                    {
+                        "name": "OrchestrationSubnet",
+                        "properties": {
+                            "addressPrefix": "10.100.2.0/24",
+                            "serviceEndpoints": [],
+                            "delegations": [
+                                {
+                                    "name": "delegation",
+                                    "properties": {
+                                        "serviceName": "Microsoft.Web/serverfarms"
+                                    }
+                                }
+                            ],
+                            "privateEndpointNetworkPolicies": "Enabled",
+                            "privateLinkServiceNetworkPolicies": "Enabled"
+                        }
+                    }
+                ],
+                "enableDdosProtection": false
+            }
+        },
+        {
+            "type": "Microsoft.Storage/storageAccounts",
+            "apiVersion": "2021-06-01",
+            "name": "[variables('StorageAccountName')]",
+            "location": "[resourceGroup().location]",
+            "sku": {
+                "name": "Standard_LRS",
+                "tier": "Standard"
+            },
+            "kind": "StorageV2",
+            "properties": {
+                "minimumTlsVersion": "TLS1_0",
+                "networkAcls": {
+                    "bypass": "AzureServices",
+                    "defaultAction": "Deny"
+                },
+                "supportsHttpsTrafficOnly": true,
+                "encryption": {
+                    "services": {
+                        "file": {
+                            "keyType": "Account",
+                            "enabled": true
+                        },
+                        "blob": {
+                            "keyType": "Account",
+                            "enabled": true
+                        }
+                    },
+                    "keySource": "Microsoft.Storage"
+                },
+                "accessTier": "Cool"
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/virtualNetworks', variables('VirtualNetworkName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Storage/storageAccounts/fileServices/shares",
+            "apiVersion": "2021-04-01",
+            "name": "[concat(variables('StorageAccountName'), '/default/', toLower(variables('LogicAppName')))]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts', variables('StorageAccountName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Network/privateDnsZones",
+            "apiVersion": "2020-06-01",
+            "name": "[variables('PrivateStorageFileDnsZoneName')]",
+            "location": "global",
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/virtualNetworks', variables('VirtualNetworkName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Network/privateDnsZones",
+            "apiVersion": "2020-06-01",
+            "name": "[variables('PrivateStorageBlobDnsZoneName')]",
+            "location": "global",
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/virtualNetworks', variables('VirtualNetworkName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Network/privateDnsZones",
+            "apiVersion": "2020-06-01",
+            "name": "[variables('PrivateStorageQueueDnsZoneName')]",
+            "location": "global",
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/virtualNetworks', variables('VirtualNetworkName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Network/privateDnsZones",
+            "apiVersion": "2020-06-01",
+            "name": "[variables('PrivateStorageTableDnsZoneName')]",
+            "location": "global",
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/virtualNetworks', variables('VirtualNetworkName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Network/privateDnsZones",
+            "apiVersion": "2020-06-01",
+            "name": "[variables('DnsZoneNameInsightsMonitor')]",
+            "location": "global",
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/virtualNetworks', variables('VirtualNetworkName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Network/privateDnsZones",
+            "apiVersion": "2020-06-01",
+            "name": "[variables('DnsZoneNameInsightsOds')]",
+            "location": "global",
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/virtualNetworks', variables('VirtualNetworkName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Network/privateDnsZones",
+            "apiVersion": "2020-06-01",
+            "name": "[variables('DnsZoneNameInsightsOms')]",
+            "location": "global",
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/virtualNetworks', variables('VirtualNetworkName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Network/privateDnsZones",
+            "apiVersion": "2020-06-01",
+            "name": "[variables('DnsZoneNameAppService')]",
+            "location": "global",
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/virtualNetworks', variables('VirtualNetworkName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+            "apiVersion": "2020-06-01",
+            "name": "[concat(variables('PrivateStorageFileDnsZoneName'), '/', variables('VirtualNetworkLinksSuffixFileStorageName'))]",
+            "location": "global",
+            "properties": {
+                "registrationEnabled": false,
+                "virtualNetwork": {
+                    "id": "[resourceId('Microsoft.Network/virtualNetworks', variables('VirtualNetworkName'))]"
+                }
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/privateDnsZones',variables('PrivateStorageFileDnsZoneName'))]",
+                "[resourceId('Microsoft.Network/virtualNetworks', variables('VirtualNetworkName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+            "apiVersion": "2020-06-01",
+            "name": "[concat(variables('PrivateStorageBlobDnsZoneName'), '/', variables('VirtualNetworkLinksSuffixBlobStorageName'))]",
+            "location": "global",
+            "properties": {
+                "registrationEnabled": false,
+                "virtualNetwork": {
+                    "id": "[resourceId('Microsoft.Network/virtualNetworks', variables('VirtualNetworkName'))]"
+                }
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/privateDnsZones',variables('PrivateStorageFileDnsZoneName'))]",
+                "[resourceId('Microsoft.Network/virtualNetworks', variables('VirtualNetworkName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+            "apiVersion": "2020-06-01",
+            "name": "[concat(variables('PrivateStorageQueueDnsZoneName'), '/', variables('VirtualNetworkLinksSuffixQueueStorageName'))]",
+            "location": "global",
+            "properties": {
+                "registrationEnabled": false,
+                "virtualNetwork": {
+                    "id": "[resourceId('Microsoft.Network/virtualNetworks', variables('VirtualNetworkName'))]"
+                }
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/privateDnsZones',variables('PrivateStorageFileDnsZoneName'))]",
+                "[resourceId('Microsoft.Network/virtualNetworks', variables('VirtualNetworkName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+            "apiVersion": "2020-06-01",
+            "name": "[concat(variables('PrivateStorageTableDnsZoneName'), '/', variables('VirtualNetworkLinksSuffixTableStorageName'))]",
+            "location": "global",
+            "properties": {
+                "registrationEnabled": false,
+                "virtualNetwork": {
+                    "id": "[resourceId('Microsoft.Network/virtualNetworks', variables('VirtualNetworkName'))]"
+                }
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/privateDnsZones',variables('PrivateStorageFileDnsZoneName'))]",
+                "[resourceId('Microsoft.Network/virtualNetworks', variables('VirtualNetworkName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+            "apiVersion": "2018-09-01",
+            "name": "[concat(variables('DnsZoneNameInsightsMonitor'), '/', variables('VirtualNetworkLinksSuffixInsightsMonitor'))]",
+            "location": "global",
+            "properties": {
+                "registrationEnabled": false,
+                "virtualNetwork": {
+                    "id": "[resourceId('Microsoft.Network/virtualNetworks', variables('VirtualNetworkName'))]"
+                }
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/privateDnsZones',variables('DnsZoneNameInsightsMonitor'))]",
+                "[resourceId('Microsoft.Network/virtualNetworks', variables('VirtualNetworkName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+            "apiVersion": "2018-09-01",
+            "name": "[concat(variables('DnsZoneNameInsightsOds'), '/', variables('VirtualNetworkLinksSuffixInsightsOds'))]",
+            "location": "global",
+            "properties": {
+                "registrationEnabled": false,
+                "virtualNetwork": {
+                    "id": "[resourceId('Microsoft.Network/virtualNetworks', variables('VirtualNetworkName'))]"
+                }
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/privateDnsZones',variables('DnsZoneNameInsightsOds'))]",
+                "[resourceId('Microsoft.Network/virtualNetworks', variables('VirtualNetworkName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+            "apiVersion": "2018-09-01",
+            "name": "[concat(variables('DnsZoneNameInsightsOms'), '/', variables('VirtualNetworkLinksSuffixInsightsOms'))]",
+            "location": "global",
+            "properties": {
+                "registrationEnabled": false,
+                "virtualNetwork": {
+                    "id": "[resourceId('Microsoft.Network/virtualNetworks', variables('VirtualNetworkName'))]"
+                }
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/privateDnsZones',variables('DnsZoneNameInsightsOms'))]",
+                "[resourceId('Microsoft.Network/virtualNetworks', variables('VirtualNetworkName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+            "apiVersion": "2018-09-01",
+            "name": "[concat(variables('DnsZoneNameAppService'), '/', variables('VirtualNetworkLinksSuffixAppService'))]",
+            "location": "global",
+            "properties": {
+                "registrationEnabled": false,
+                "virtualNetwork": {
+                    "id": "[resourceId('Microsoft.Network/virtualNetworks', variables('VirtualNetworkName'))]"
+                }
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/privateDnsZones',variables('DnsZoneNameAppService'))]",
+                "[resourceId('Microsoft.Network/virtualNetworks', variables('VirtualNetworkName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Network/privateEndpoints",
+            "apiVersion": "2020-11-01",
+            "name": "[variables('PrivateEndpointFileStorageName')]",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "subnet": {
+                    "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('VirtualNetworkName'), 'PrivateEndpointSubnet')]"
+                },
+                "privateLinkServiceConnections": [
+                    {
+                        "name": "StoragePrivateLinkConnection",
+                        "properties": {
+                            "privateLinkServiceId": "[resourceId('Microsoft.Storage/storageAccounts', variables('StorageAccountName'))]",
+                            "groupIds": [
+                                "file"
+                            ]
+                        }
+                    }
+                ]
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts/fileServices/shares', variables('StorageAccountName'), 'default', toLower(variables('LogicAppName')))]",
+                "[resourceId('Microsoft.Network/virtualNetworks', variables('VirtualNetworkName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Network/privateEndpoints",
+            "apiVersion": "2020-11-01",
+            "name": "[variables('PrivateEndpointBlobStorageName')]",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "subnet": {
+                    "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('VirtualNetworkName'), 'PrivateEndpointSubnet')]"
+                },
+                "privateLinkServiceConnections": [
+                    {
+                        "name": "StoragePrivateLinkConnection",
+                        "properties": {
+                            "privateLinkServiceId": "[resourceId('Microsoft.Storage/storageAccounts', variables('StorageAccountName'))]",
+                            "groupIds": [
+                                "blob"
+                            ]
+                        }
+                    }
+                ]
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts/fileServices/shares', variables('StorageAccountName'), 'default', toLower(variables('LogicAppName')))]",
+                "[resourceId('Microsoft.Network/virtualNetworks', variables('VirtualNetworkName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Network/privateEndpoints",
+            "apiVersion": "2020-11-01",
+            "name": "[variables('PrivateEndpointQueueStorageName')]",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "subnet": {
+                    "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('VirtualNetworkName'), 'PrivateEndpointSubnet')]"
+                },
+                "privateLinkServiceConnections": [
+                    {
+                        "name": "StoragePrivateLinkConnection",
+                        "properties": {
+                            "privateLinkServiceId": "[resourceId('Microsoft.Storage/storageAccounts', variables('StorageAccountName'))]",
+                            "groupIds": [
+                                "queue"
+                            ]
+                        }
+                    }
+                ]
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts/fileServices/shares', variables('StorageAccountName'), 'default', toLower(variables('LogicAppName')))]",
+                "[resourceId('Microsoft.Network/virtualNetworks', variables('VirtualNetworkName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Network/privateEndpoints",
+            "apiVersion": "2020-11-01",
+            "name": "[variables('PrivateEndpointTableStorageName')]",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "subnet": {
+                    "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('VirtualNetworkName'), 'PrivateEndpointSubnet')]"
+                },
+                "privateLinkServiceConnections": [
+                    {
+                        "name": "StoragePrivateLinkConnection",
+                        "properties": {
+                            "privateLinkServiceId": "[resourceId('Microsoft.Storage/storageAccounts', variables('StorageAccountName'))]",
+                            "groupIds": [
+                                "table"
+                            ]
+                        }
+                    }
+                ]
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts/fileServices/shares', variables('StorageAccountName'), 'default', toLower(variables('LogicAppName')))]",
+                "[resourceId('Microsoft.Network/virtualNetworks', variables('VirtualNetworkName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Network/privateEndpoints",
+            "apiVersion": "2020-11-01",
+            "name": "[variables('PrivateEndpointInsightsName')]",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "subnet": {
+                    "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('VirtualNetworkName'), 'PrivateEndpointSubnet')]"
+                },
+                "privateLinkServiceConnections": [
+                    {
+                        "name": "InsightsPrivateLinkConnection",
+                        "properties": {
+                            "privateLinkServiceId": "[resourceId('microsoft.insights/privatelinkscopes', variables('MonitorPrivateLinkScopeName'))]",
+                            "groupIds": [
+                                "azuremonitor"
+                            ]
+                        }
+                    }
+                ]
+            },
+            "dependsOn": [
+                "[resourceId('microsoft.insights/privatelinkscopes', variables('MonitorPrivateLinkScopeName'))]",
+                "[resourceId('Microsoft.Network/virtualNetworks', variables('VirtualNetworkName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Network/privateEndpoints",
+            "apiVersion": "2020-11-01",
+            "name": "[variables('PrivateEndpointAppServiceLogicAppName')]",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "subnet": {
+                    "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('VirtualNetworkName'), 'PrivateEndpointSubnet')]"
+                },
+                "privateLinkServiceConnections": [
+                    {
+                        "name": "LogicAppPrivateLinkConnection",
+                        "properties": {
+                            "privateLinkServiceId": "[resourceId('Microsoft.Web/sites', variables('LogicAppName'))]",
+                            "groupIds": [
+                                "sites"
+                            ]
+                        }
+                    }
+                ]
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/sites', variables('LogicAppName'))]",
+                "[resourceId('Microsoft.Network/virtualNetworks', variables('VirtualNetworkName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+            "apiVersion": "2020-11-01",
+            "name": "[concat(variables('PrivateEndpointFileStorageName'), '/default')]",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "privateDnsZoneConfigs": [
+                    {
+                        "name": "privatelink-file-core-windows-net",
+                        "properties": {
+                            "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', variables('PrivateStorageFileDnsZoneName'))]"
+                        }
+                    }
+                ]
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/privateDnsZones', variables('PrivateStorageFileDnsZoneName'))]",
+                "[resourceId('Microsoft.Network/privateEndpoints', variables('PrivateEndpointFileStorageName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+            "apiVersion": "2020-11-01",
+            "name": "[concat(variables('PrivateEndpointBlobStorageName'), '/default')]",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "privateDnsZoneConfigs": [
+                    {
+                        "name": "privatelink-blob-core-windows-net",
+                        "properties": {
+                            "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', variables('PrivateStorageBlobDnsZoneName'))]"
+                        }
+                    }
+                ]
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/privateDnsZones', variables('PrivateStorageBlobDnsZoneName'))]",
+                "[resourceId('Microsoft.Network/privateEndpoints', variables('PrivateEndpointBlobStorageName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+            "apiVersion": "2020-11-01",
+            "name": "[concat(variables('PrivateEndpointQueueStorageName'), '/default')]",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "privateDnsZoneConfigs": [
+                    {
+                        "name": "privatelink-queue-core-windows-net",
+                        "properties": {
+                            "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', variables('PrivateStorageQueueDnsZoneName'))]"
+                        }
+                    }
+                ]
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/privateDnsZones', variables('PrivateStorageQueueDnsZoneName'))]",
+                "[resourceId('Microsoft.Network/privateEndpoints', variables('PrivateEndpointQueueStorageName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+            "apiVersion": "2020-11-01",
+            "name": "[concat(variables('PrivateEndpointTableStorageName'), '/default')]",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "privateDnsZoneConfigs": [
+                    {
+                        "name": "privatelink-table-core-windows-net",
+                        "properties": {
+                            "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', variables('PrivateStorageTableDnsZoneName'))]"
+                        }
+                    }
+                ]
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/privateDnsZones', variables('PrivateStorageTableDnsZoneName'))]",
+                "[resourceId('Microsoft.Network/privateEndpoints', variables('PrivateEndpointTableStorageName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+            "apiVersion": "2020-11-01",
+            "name": "[concat(variables('PrivateEndpointInsightsName'), '/default')]",
+            "properties": {
+                "privateDnsZoneConfigs": [
+                    {
+                        "name": "privatelink-monitor-azure-com",
+                        "properties": {
+                            "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', variables('DnsZoneNameInsightsMonitor'))]"
+                        }
+                    },
+                    {
+                        "name": "privatelink-oms-opinsights-azure-com",
+                        "properties": {
+                            "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', variables('DnsZoneNameInsightsOms'))]"
+                        }
+                    },
+                    {
+                        "name": "privatelink-ods-opinsights-azure-com",
+                        "properties": {
+                            "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', variables('DnsZoneNameInsightsOds'))]"
+                        }
+                    },
+                    {
+                        "name": "privatelink-blob-core-windows-net",
+                        "properties": {
+                            "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', variables('PrivateStorageBlobDnsZoneName'))]"
+                        }
+                    }
+                ]
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/privateEndpoints', variables('PrivateEndpointInsightsName'))]",
+                "[resourceId('Microsoft.Network/privateDnsZones', variables('DnsZoneNameInsightsMonitor'))]",
+                "[resourceId('Microsoft.Network/privateDnsZones', variables('DnsZoneNameInsightsOds'))]",
+                "[resourceId('Microsoft.Network/privateDnsZones', variables('DnsZoneNameInsightsOms'))]",
+                "[resourceId('Microsoft.Network/privateDnsZones', variables('PrivateStorageBlobDnsZoneName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+            "apiVersion": "2020-11-01",
+            "name": "[concat(variables('PrivateEndpointAppServiceLogicAppName'), '/default')]",
+            "properties": {
+                "privateDnsZoneConfigs": [
+                    {
+                        "name": "privatelink-azurewebsites-net",
+                        "properties": {
+                            "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', variables('DnsZoneNameAppService'))]"
+                        }
+                    }
+                ]
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/privateEndpoints', variables('PrivateEndpointAppServiceLogicAppName'))]",
+                "[resourceId('Microsoft.Network/privateDnsZones', variables('DnsZoneNameAppService'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Insights/components",
+            "apiVersion": "2020-02-02",
+            "name": "[variables('ApplicationInsightsName')]",
+            "location": "[resourceGroup().location]",
+            "kind": "web",
+            "properties": {
+                "Application_Type": "web",
+                "RetentionInDays": 90,
+                "IngestionMode": "ApplicationInsights",
+                "publicNetworkAccessForIngestion": "Disabled",
+                "publicNetworkAccessForQuery": "Disabled"
+            }
+        },
+        {
+            "type": "microsoft.insights/privatelinkscopes",
+            "apiVersion": "2021-07-01-preview",
+            "name": "[variables('MonitorPrivateLinkScopeName')]",
+            "location": "global",
+            "properties": {
+                "accessModeSettings": {
+                    "exclusions": [],
+                    "queryAccessMode": "Open",
+                    "ingestionAccessMode": "Open"
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Insights/privateLinkScopes/scopedResources",
+            "apiVersion": "2021-07-01-preview",
+            "name": "[concat(variables('MonitorPrivateLinkScopeName'), '/scoped-', variables('ApplicationInsightsName'))]",
+            "properties": {
+                "linkedResourceId": "[resourceId('Microsoft.Insights/components', variables('ApplicationInsightsName'))]"
+            },
+            "dependsOn": [
+                "[resourceId('microsoft.insights/privateLinkScopes', variables('MonitorPrivateLinkScopeName'))]"
+            ]
+        },
+        {
+            "type": "Microsoft.Web/serverfarms",
+            "apiVersion": "2021-02-01",
+            "name": "[variables('LogicAppHostingPlanName')]",
+            "location": "[resourceGroup().location]",
+            "tags": {},
+            "sku": {
+                "name": "WS1",
+                "tier": "WorkflowStandard",
+                "size": "WS1",
+                "family": "WS",
+                "capacity": 1
+            },
+            "kind": "elastic",
+            "properties": {
+                "perSiteScaling": false,
+                "elasticScaleEnabled": true,
+                "maximumElasticWorkerCount": 20,
+                "isSpot": false,
+                "reserved": false,
+                "isXenon": false,
+                "hyperV": false,
+                "targetWorkerCount": 0,
+                "targetWorkerSizeId": 0,
+                "zoneRedundant": false
+            }
+        },
+        {
+            "type": "Microsoft.Web/sites",
+            "apiVersion": "2021-02-01",
+            "name": "[variables('LogicAppName')]",
+            "location": "[resourceGroup().location]",
+            "kind": "functionapp,workflowapp",
+            "identity": {
+                "type": "SystemAssigned"
+            },
+            "properties": {
+                "enabled": true,
+                "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('LogicAppHostingPlanName'))]",
+                "siteConfig": {
+                    "numberOfWorkers": 1,
+                    "acrUseManagedIdentityCreds": false,
+                    "alwaysOn": false,
+                    "http20Enabled": false,
+                    "functionAppScaleLimit": 0,
+                    "minimumElasticInstanceCount": 1,
+                    "appSettings": [
+                        {
+                            "name": "FUNCTIONS_EXTENSION_VERSION",
+                            "value": "~3"
+                        },
+                        {
+                            "name": "FUNCTIONS_WORKER_RUNTIME",
+                            "value": "node"
+                        },
+                        {
+                            "name": "APPINSIGHTS_INSTRUMENTATIONKEY",
+                            "value": "[reference(resourceId('Microsoft.Insights/components', variables('ApplicationInsightsName')), '2020-02-02').InstrumentationKey]"
+                        },
+                        {
+                            "name": "APPLICATIONINSIGHTS_CONNECTION_STRING",
+                            "value": "[reference(resourceId('Microsoft.Insights/components', variables('ApplicationInsightsName')), '2020-02-02').ConnectionString]"
+                        },
+                        {
+                            "name": "AzureWebJobsStorage",
+                            "value": "[concat('DefaultEndpointsProtocol=https;AccountName=', variables('StorageAccountName'), ';AccountKey=', listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('StorageAccountName')), '2021-06-01').keys[0].value, ';EndpointSuffix=core.windows.net')]"
+                        },
+                        {
+                            "name": "WEBSITE_CONTENTAZUREFILECONNECTIONSTRING",
+                            "value": "[concat('DefaultEndpointsProtocol=https;AccountName=', variables('StorageAccountName'), ';AccountKey=', listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('StorageAccountName')), '2021-06-01').keys[0].value, ';EndpointSuffix=core.windows.net')]"
+                        },
+                        {
+                            "name": "WEBSITE_CONTENTSHARE",
+                            "value": "[toLower(variables('LogicAppName'))]"
+                        },
+                        {
+                            "name": "APP_KIND",
+                            "value": "workflowApp"
+                        },
+                        {
+                            "name": "WEBSITE_VNET_ROUTE_ALL",
+                            "value": "1"
+                        },
+                        {
+                            "name": "WEBSITE_DNS_SERVER",
+                            "value": "168.63.129.16"
+                        },
+                        {
+                            "name": "AzureFunctionsJobHost__extensionBundle__id",
+                            "value": "Microsoft.Azure.Functions.ExtensionBundle.Workflows",
+                            "slotSetting": false
+                        },
+                        {
+                            "name": "AzureFunctionsJobHost__extensionBundle__version",
+                            "value": "[1.*, 2.0.0)",
+                            "slotSetting": false
+                        },
+                        {
+                            "name": "WEBSITE_CONTENTOVERVNET",
+                            "value": "1",
+                            "slotSetting": false
+                        }
+                    ],
+                    "cors": {
+                        "allowedOrigins": [
+                            "https://afd.hosting.portal.azure.net",
+                            "https://afd.hosting-ms.portal.azure.net",
+                            "https://hosting.portal.azure.net",
+                            "https://ms.hosting.portal.azure.net",
+                            "https://ema-ms.hosting.portal.azure.net",
+                            "https://ema.hosting.portal.azure.net",
+                            "https://ema.hosting.portal.azure.net"
+                        ]
+                    }
+                },
+                "httpsOnly": true,
+                "virtualNetworkSubnetId": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('VirtualNetworkName'), 'OrchestrationSubnet')]",
+                "keyVaultReferenceIdentity": "SystemAssigned",
+                "resources": [
+                    {
+                        "type": "networkconfig",
+                        "apiVersion": "2021-02-01",
+                        "name": "virtualNetwork",
+                        "location": "[resourceGroup().location]",
+                        "properties": {
+                            "subnetResourceId": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('VirtualNetworkName'), 'OrchestrationSubnet')]",
+                            "swiftSupported": true
+                        }
+                    }
+                ]
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/serverfarms', variables('LogicAppHostingPlanName'))]"
+            ]
+        }
+    ],
+    "outputs": {}
+}

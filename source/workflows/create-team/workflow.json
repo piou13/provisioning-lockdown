@@ -1,0 +1,121 @@
+{
+    "definition": {
+        "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+        "actions": {
+            "CreateTeam": {
+                "inputs": {
+                    "authentication": {
+                        "audience": "https://graph.microsoft.com",
+                        "type": "ManagedServiceIdentity"
+                    },
+                    "body": "@json(replace(string(outputs('CreateTeamPayload')), '@@', '@'))",
+                    "headers": {
+                        "Accept": "application/json",
+                        "Content-Type": "application/json"
+                    },
+                    "method": "POST",
+                    "uri": "https://graph.microsoft.com/v1.0/teams"
+                },
+                "operationOptions": "SuppressWorkflowHeaders",
+                "runAfter": {
+                    "CreateTeamPayload": [
+                        "Succeeded"
+                    ]
+                },
+                "runtimeConfiguration": {
+                    "staticResult": {
+                        "name": "HTTP1",
+                        "staticResultOptions": "Disabled"
+                    }
+                },
+                "type": "Http"
+            },
+            "CreateTeamPayload": {
+                "inputs": {
+                    "description": "@{triggerBody()?['Description']}",
+                    "displayName": "@{triggerBody()?['Name']}",
+                    "members": [
+                        {
+                            "@@odata.type": "#microsoft.graph.aadUserConversationMember",
+                            "roles": [
+                                "owner"
+                            ],
+                            "user@@odata.bind": "https://graph.microsoft.com/v1.0/users('@{body('GetOwnerId')?['id']}')"
+                        }
+                    ],
+                    "template@@odata.bind": "https://graph.microsoft.com/v1.0/teamsTemplates('standard')",
+                    "visibility": "Private"
+                },
+                "runAfter": {
+                    "GetOwnerId": [
+                        "Succeeded"
+                    ]
+                },
+                "type": "Compose"
+            },
+            "GetOwnerId": {
+                "inputs": {
+                    "authentication": {
+                        "audience": "https://graph.microsoft.com",
+                        "type": "ManagedServiceIdentity"
+                    },
+                    "headers": {
+                        "Accept": "application/json",
+                        "Content-Type": "application/json"
+                    },
+                    "method": "GET",
+                    "uri": "https://graph.microsoft.com/v1.0/users/@{triggerBody()?['OwnerEmail']}"
+                },
+                "operationOptions": "SuppressWorkflowHeaders",
+                "runAfter": {},
+                "type": "Http"
+            },
+            "Response": {
+                "inputs": {
+                    "statusCode": 200
+                },
+                "kind": "http",
+                "runAfter": {
+                    "CreateTeam": [
+                        "Succeeded"
+                    ]
+                },
+                "type": "Response"
+            }
+        },
+        "contentVersion": "1.0.0.0",
+        "outputs": {},
+        "staticResults": {
+            "HTTP1": {
+                "outputs": {
+                    "headers": {},
+                    "statusCode": "OK"
+                },
+                "status": "Succeeded"
+            }
+        },
+        "triggers": {
+            "manual": {
+                "inputs": {
+                    "schema": {
+                        "properties": {
+                            "Description": {
+                                "type": "string"
+                            },
+                            "Name": {
+                                "type": "string"
+                            },
+                            "OwnerEmail": {
+                                "type": "string"
+                            }
+                        },
+                        "type": "object"
+                    }
+                },
+                "kind": "Http",
+                "type": "Request"
+            }
+        }
+    },
+    "kind": "Stateful"
+}

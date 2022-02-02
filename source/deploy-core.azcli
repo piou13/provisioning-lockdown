@@ -1,0 +1,51 @@
+az login
+
+# Define parameters
+subscriptionId="<- YOUR SUBSCRIPTION ID ->"
+resourcesGroup="<- YOUR RESOURCES GROUP NAME ->"
+resourcesPrefix="<- YOUR RESOURCES PREFIX LOWERCASE, NO SPACE, STARTS BY LETTER, ... ->"
+ownerEmail="<- DEMO EMAIL FOR TEAMS OWNER ->"
+
+function setRoleAssignment() {
+    # azure cli doesn't have a command yet to add API permissions to service principal (or did not find it ;)), 
+    # we need to workaround by calling the Graph using az rest. A check-if-exist is also required to avoid error.
+    existingRoleUser=$(az rest --method GET --uri "https://graph.microsoft.com/v1.0/servicePrincipals/$1/appRoleAssignments" --headers "Content-Type=application/json" --query "value[?appRoleId=='$2'].appRoleId" --output tsv)
+    if [[ -z "$existingRoleUser" ]]
+    then
+        az rest --method POST --uri "https://graph.microsoft.com/v1.0/servicePrincipals/$1/appRoleAssignments" --headers "Content-Type=application/json" --body $3
+    fi
+}
+
+# Deploy core resources ARM template
+date=$(date '+%Y-%m-%d-%H-%M-%S')
+deploymentName="provlockdown-core-resources-${date}"
+armParam="{\"ResourcesName\":{\"value\":\"${resourcesPrefix}\"}}"
+az deployment group create --resource-group $resourcesGroup --name $deploymentName --template-file "template-core-components.json" --parameters $armParam --mode Incremental
+
+# Set LogicApp's ManagedIdentity Graph permission to create a new Teams and read Users
+msiDisplayName=$(az deployment group show -g $resourcesGroup -n $deploymentName --query properties.outputs.logicAppName.value --output tsv)
+msiAppId=$(az ad sp list --filter "displayName eq '$msiDisplayName'" --query '[0].objectId' --output tsv)
+msGraphAppId=$(az ad sp list --filter "displayName eq 'Microsoft Graph'" --query '[0].objectId' --output tsv)
+msGraphAppRoleUser="7ab1d382-f21e-4acd-a863-ba3e13f7da61" # Directory.Read.All
+msGraphAppRoleTeam="23fc2474-f741-46ce-8465-674744c5c361" # Team.Create
+roleAssignmentBodyUser="{\"principalId\":\"${msiAppId}\",\"resourceId\":\"${msGraphAppId}\",\"appRoleId\":\"${msGraphAppRoleUser}\"}"
+roleAssignmentBodyTeam="{\"principalId\":\"${msiAppId}\",\"resourceId\":\"${msGraphAppId}\",\"appRoleId\":\"${msGraphAppRoleTeam}\"}"
+setRoleAssignment $msiAppId $msGraphAppRoleUser $roleAssignmentBodyUser
+setRoleAssignment $msiAppId $msGraphAppRoleTeam $roleAssignmentBodyTeam
+
+# Set the logicApp Standard parameters
+logicAppParameters="{\"OwnerEmail\":{\"type\": \"String\",\"value\": \"${ownerEmail}\"}}"
+echo $logicAppParameters > workflows/parameters.json
+
+# Generate deployment zip file 
+# Temporary use PowerShell to create the zip deployment package as no native zip command is available on Windows
+powershell -Command "& {Push-Location workflows -StackName 'zip'; Compress-Archive -Path 'create-team/','internal-call/','host.json','parameters.json' -DestinationPath 'pub/workflows.zip' -Force; Pop-Location -StackName 'zip';}"
+
+# Deploy LogicApp Standard workflows
+az logicapp deployment source config-zip --name $msiDisplayName --resource-group $resourcesGroup --subscription $subscriptionId --src workflows/pub/workflows.zip
+
+# Deploy LogicApp Consumption workflow for test from 'outside'
+# first, we get the callback URL from the create-team workflow to push it as an ARM parameter to set the endpoint's call URL within the test workflow
+createTeamCallbackUrl=$(az rest --method POST --uri "https://management.azure.com/subscriptions/$subscriptionId/resourceGroups/$resourcesGroup/providers/Microsoft.Web/sites/$msiDisplayName/hostruntime/runtime/webhooks/workflow/api/management/workflows/create-team/triggers/manual/listCallbackUrl?api-version=2018-11-01" --query "value" --output tsv)
+armParamTestWorkflow="{\"CreateTeamCallBackUrl\":{\"value\":\"${createTeamCallbackUrl}\"},\"OwnerEmail\":{\"value\":\"${ownerEmail}\"}}"
+az deployment group create --resource-group $resourcesGroup --name "test-workflow-resource-${date}" --template-file "template-test-workflow.json" --parameters $armParamTestWorkflow --mode Incremental

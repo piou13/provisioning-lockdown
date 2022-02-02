@@ -1,0 +1,11 @@
+az login
+
+# Define parameters
+resourcesGroup="<- YOUR RESOURCES GROUP NAME ->"
+resourcesPrefix="<- YOUR RESOURCES PREFIX LOWERCASE, NO SPACE, STARTS BY LETTER, ... ->"
+
+# Deploy core resources ARM template
+date=$(date '+%Y-%m-%d-%H-%M-%S')
+deploymentName="provlockdown-lockdown-components-${date}"
+armParam="{\"ResourcesName\":{\"value\":\"${resourcesPrefix}\"}}"
+az deployment group create --resource-group $resourcesGroup --name $deploymentName --template-file "template-lockdown.json" --parameters $armParam --mode Incremental
