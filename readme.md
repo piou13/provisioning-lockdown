@@ -228,7 +228,7 @@ Example for Application Insights:
 ## OK, now my solution is locked down, how do I manage it?
 
 A good option, as shown in the diagram, is to use a Virtual Machine integrated to the Vnet. This way, we will be able to 'talk' to all the services provided by Private Endpoint (because our VM will be able to do Names/DNS resolutions).
-Also, one important consideration when using this approach: if you use DevOps to deploy the solution, you need a Self-Hosted agent because the traffic between Microsoft-hosted agents and your servers will be over public network and won't work.
+Also, one important consideration when using this approach: if you use DevOps to deploy the solution, you need a Self-Hosted agent because the traffic between Microsoft-hosted agents and your services will be over public network and won't work.
 
 ## **References**
 
