@@ -10,7 +10,7 @@ Today, using Azure to support Microsoft 365 services is common. We can leverage 
 A common use case is to manage SharePoint/Teams site provisioning (especially since the PnP teams effort on practice and technologies like the PnP Provisioning Engine). This is a great replacement for Office365's default self-service approach, particularly to better manage and govern your tenant and provide better support for users.
 
 On the other hand, from a security perspective, we have a major concern. All these Azure services are accessible using the public network and anyone can try to gain access to it.
-Most of the time, services involved in a Office 365 provisioning solution, do not need to be externally exposed as they are the backend part of an entire solution that require to only expose the endpoint receiving the provisioning request.
+Most of the time, services involved in a Office 365 provisioning solution, do not need to be externally exposed as they are the backend part of an entire solution that requires to only expose the endpoint receiving the provisioning request.
 
 To handle this situation, Microsoft released the Azure Private Links/Private Endpoints. You can have the details here: https://docs.microsoft.com/en-us/azure/private-link/private-endpoint-overview, but shortly, here's a quick description from Microsoft:
 
@@ -228,7 +228,7 @@ Example for Application Insights:
 ## OK, now my solution is locked down, how do I manage it?
 
 A good option, as shown in the diagram, is to use a Virtual Machine integrated to the Vnet. This way, we will be able to 'talk' to all the services provided by Private Endpoint (because our VM will be able to do Names/DNS resolutions).
-Also, one important consideration when using this approach: if you use DevOps to deploy the solution, you need a Self-Hosted agent because the traffic between Microsoft-hosted agents and your servers will be over public network.
+Also, one important consideration when using this approach: if you use DevOps to deploy the solution, you need a Self-Hosted agent because the traffic between Microsoft-hosted agents and your servers will be over public network and won't work.
 
 ## **References**
 
